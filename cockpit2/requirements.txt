@@ -1,0 +1,19 @@
+# cockpit2 dependencies (Python 3.10+)
+# Install PyTorch FIRST with the right CUDA build from https://pytorch.org/get-started/locally/
+# (developed with torch 2.14.1+cu126 on an RTX 3050). The lines below then leave it as is.
+torch
+torchvision
+
+numpy
+pandas
+pillow
+
+# capture (capture/capture_synthetic_v2.py, capture/vsi_probe.py) -- Windows + FlightGear
+requests
+mss
+
+# question routing in gui/copilot_core_v2.py
+transformers      # Qwen2.5-1.5B-Instruct intent gate (downloaded on first run)
+scikit-learn      # TF-IDF fallback when the LLM is disabled/unavailable
+
+# the app itself (../integrated.py) also needs: gradio

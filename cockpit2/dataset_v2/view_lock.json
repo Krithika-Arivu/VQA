@@ -1,0 +1,15 @@
+{
+  "screen": [
+    2880,
+    1800
+  ],
+  "view": {
+    "/sim/current-view/view-number": 0.0,
+    "/sim/current-view/field-of-view": 73.6,
+    "/sim/current-view/heading-offset-deg": 0.0,
+    "/sim/current-view/pitch-offset-deg": -12.0,
+    "/sim/current-view/x-offset-m": -0.21,
+    "/sim/current-view/y-offset-m": 0.273,
+    "/sim/current-view/z-offset-m": 0.36
+  }
+}

@@ -1,0 +1,80 @@
+{
+  "n_test": 375,
+  "per_gauge": {
+    "pitch": {
+      "unit": "deg",
+      "MAE": 0.207,
+      "within_1": 100.0,
+      "baseline_MAE": 2.309,
+      "baseline_within_1": 19.5
+    },
+    "roll": {
+      "unit": "deg",
+      "MAE": 0.39,
+      "within_2": 99.7,
+      "baseline_MAE": 3.093,
+      "baseline_within_2": 74.7
+    },
+    "airspeed": {
+      "unit": "kt",
+      "MAE": 1.748,
+      "within_5": 96.3,
+      "baseline_MAE": 37.241,
+      "baseline_within_5": 2.4
+    },
+    "altitude": {
+      "unit": "ft",
+      "MAE": 3.039,
+      "within_100": 100.0,
+      "baseline_MAE": 2499.941,
+      "baseline_within_100": 0.0
+    },
+    "vs": {
+      "unit": "ft/min",
+      "MAE": 9.158,
+      "within_100": 100.0,
+      "baseline_MAE": 210.572,
+      "baseline_within_100": 7.5
+    },
+    "turn": {
+      "unit": "std-rate",
+      "MAE": 0.023,
+      "within_0.2": 100.0,
+      "baseline_MAE": 0.278,
+      "baseline_within_0.2": 65.6
+    },
+    "rpm": {
+      "unit": "rpm",
+      "MAE": 57.234,
+      "within_100": 86.7,
+      "baseline_MAE": 855.012,
+      "baseline_within_100": 0.0
+    },
+    "heading": {
+      "unit": "deg",
+      "MAE": 1.14,
+      "within_5": 100.0,
+      "baseline_MAE": 91.436,
+      "baseline_within_5": 2.1
+    },
+    "altitude_coarse": {
+      "unit": "ft",
+      "MAE": 97.828,
+      "within_100": 64.0,
+      "baseline_MAE": 2499.941,
+      "baseline_within_100": 0.0
+    },
+    "altitude_shorthand": {
+      "unit": "ft",
+      "MAE": 39.934,
+      "within_100": 91.7,
+      "baseline_MAE": 2499.941,
+      "baseline_within_100": 0.0
+    }
+  },
+  "note": "baseline = always predict the TRAIN mean (heading: train circular mean); phase baseline = most common train phase",
+  "phase": {
+    "accuracy": 100.0,
+    "baseline_majority_accuracy": 20.0
+  }
+}

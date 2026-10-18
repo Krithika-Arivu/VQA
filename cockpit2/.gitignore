@@ -1,0 +1,19 @@
+# Local virtual environment and Python cache
+.venv/
+__pycache__/
+*.pyc
+
+# VSI-lag diagnostic output images (the script capture/vsi_probe.py is kept)
+vsi_probe/
+
+# Dataset images and model weights stay local (too large for git).
+# Keep only the small files the app and the report need.
+dataset_v2/*
+!dataset_v2/reference_panel.png
+!dataset_v2/view_lock.json
+!dataset_v2/model_v2/
+dataset_v2/model_v2/*
+!dataset_v2/model_v2/test_metrics.json
+!dataset_v2/model_v2/phase_confusion.csv
+!dataset_v2/model_v2/test_predictions.csv
+!dataset_v2/model_v2/split.csv
