@@ -1,0 +1,66 @@
+device: cuda | input 448x352 | seed 42 | alt_fine 1 | alt_short 1
+frames per phase: {'engine_off': 500, 'taxi': 500, 'takeoff_roll': 500, 'climb': 500, 'level_flight': 500}
+train 1750 | val 375 | test 375
+epoch  1  train 0.8430  val 0.3143  lr 3.0e-04  <- best (saved)
+epoch  2  train 0.3549  val 0.1643  lr 3.0e-04  <- best (saved)
+epoch  3  train 0.2339  val 0.0910  lr 3.0e-04  <- best (saved)
+epoch  4  train 0.1858  val 0.0762  lr 3.0e-04  <- best (saved)
+epoch  5  train 0.1575  val 0.0588  lr 3.0e-04  <- best (saved)
+epoch  6  train 0.1424  val 0.0490  lr 3.0e-04  <- best (saved)
+epoch  7  train 0.1285  val 0.0438  lr 3.0e-04  <- best (saved)
+epoch  8  train 0.1192  val 0.0323  lr 3.0e-04  <- best (saved)
+epoch  9  train 0.1121  val 0.0353  lr 3.0e-04
+epoch 10  train 0.1012  val 0.0427  lr 3.0e-04
+epoch 11  train 0.0998  val 0.0234  lr 3.0e-04  <- best (saved)
+epoch 12  train 0.0935  val 0.0349  lr 3.0e-04
+epoch 13  train 0.0906  val 0.0281  lr 3.0e-04
+epoch 14  train 0.0804  val 0.0320  lr 1.5e-04
+epoch 15  train 0.0729  val 0.0134  lr 1.5e-04  <- best (saved)
+epoch 16  train 0.0650  val 0.0137  lr 1.5e-04
+epoch 17  train 0.0602  val 0.0104  lr 1.5e-04  <- best (saved)
+epoch 18  train 0.0606  val 0.0165  lr 1.5e-04
+epoch 19  train 0.0595  val 0.0154  lr 1.5e-04
+epoch 20  train 0.0582  val 0.0146  lr 7.5e-05
+epoch 21  train 0.0548  val 0.0079  lr 7.5e-05  <- best (saved)
+epoch 22  train 0.0518  val 0.0081  lr 7.5e-05
+epoch 23  train 0.0493  val 0.0083  lr 7.5e-05
+epoch 24  train 0.0504  val 0.0093  lr 3.7e-05
+epoch 25  train 0.0475  val 0.0062  lr 3.7e-05  <- best (saved)
+epoch 26  train 0.0466  val 0.0074  lr 3.7e-05
+epoch 27  train 0.0462  val 0.0067  lr 3.7e-05
+epoch 28  train 0.0457  val 0.0058  lr 3.7e-05  <- best (saved)
+epoch 29  train 0.0440  val 0.0061  lr 3.7e-05
+epoch 30  train 0.0460  val 0.0064  lr 3.7e-05
+epoch 31  train 0.0436  val 0.0053  lr 3.7e-05  <- best (saved)
+epoch 32  train 0.0436  val 0.0058  lr 3.7e-05
+epoch 33  train 0.0444  val 0.0053  lr 3.7e-05  <- best (saved)
+epoch 34  train 0.0442  val 0.0060  lr 3.7e-05
+epoch 35  train 0.0442  val 0.0055  lr 3.7e-05
+epoch 36  train 0.0416  val 0.0067  lr 1.9e-05
+epoch 37  train 0.0403  val 0.0052  lr 1.9e-05  <- best (saved)
+epoch 38  train 0.0395  val 0.0044  lr 1.9e-05  <- best (saved)
+epoch 39  train 0.0397  val 0.0044  lr 1.9e-05
+epoch 40  train 0.0411  val 0.0052  lr 1.9e-05
+
+================ TEST SET (never used for training or model selection) ================
+gauge           MAE   within tol | baseline MAE  baseline within
+pitch        0.21 deg   100.0% (▒1) |         2.31            19.5%
+roll         0.39 deg    99.7% (▒2) |         3.09            74.7%
+airspeed     1.75 kt     96.3% (▒5) |        37.24             2.4%
+altitude     3.04 ft    100.0% (▒100) |      2499.94             0.0%
+vs           9.16 ft/min100.0% (▒100) |       210.57             7.5%
+turn         0.02 std-rate100.0% (▒0.2) |         0.28            65.6%
+rpm         57.23 rpm    86.7% (▒100) |       855.01             0.0%
+heading      1.14 deg   100.0% (▒5) |        91.44             2.1%
+altitude_coarse   97.83 ft     64.0% (▒100) |      2499.94             0.0%
+altitude_shorthand   39.93 ft     91.7% (▒100) |      2499.94             0.0%
+phase     accuracy 100.0%  (baseline: always 'engine_off' = 20.0%)
+pred          engine_off  taxi  takeoff_roll  climb  level_flight
+true                                                             
+engine_off            75     0             0      0             0
+taxi                   0    75             0      0             0
+takeoff_roll           0     0            75      0             0
+climb                  0     0             0     75             0
+level_flight           0     0             0      0            75
+
+saved: dataset_v2\model_v2

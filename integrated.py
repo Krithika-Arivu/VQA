@@ -26,9 +26,11 @@ Setup:
    both modules' dependencies now need to coexist in ONE Python environment,
    since this is one process, not two separate subprocesses like before)
 
-Run FROM THE REPO ROOT (needs both cockpit/ and radar/ next to it, e.g. on
-the `integrate` branch):
-  python integrated.py --cockpit_data_dir "C:\...\consolidated" --radar_base_dir "C:\...\radar_base"
+Run FROM THE REPO ROOT (needs cockpit2/ (and/or cockpit/) and radar/ next to it):
+  python integrated.py --radar_base_dir "C:\...\radar_base"
+      -> Cockpit uses model v2 by default (cockpit2/dataset_v2/model_v2/best_model.pt)
+  python integrated.py --cockpit_version v1 --cockpit_data_dir "C:\...\consolidated" ...
+      -> old v1 model (kept for comparison only)
 
 Then open the local URL Gradio prints (usually http://127.0.0.1:7860).
 
@@ -46,6 +48,7 @@ from PIL import Image
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 COCKPIT_DIR = os.path.join(REPO_ROOT, "cockpit", "gui")
+COCKPIT2_DIR = os.path.join(REPO_ROOT, "cockpit2", "gui")
 RADAR_DIR = os.path.join(REPO_ROOT, "radar")
 
 # Both modules do local, same-folder imports (`from copilot_core import
@@ -53,14 +56,26 @@ RADAR_DIR = os.path.join(REPO_ROOT, "radar")
 # now runs in ONE process (unlike the old subprocess-per-module launcher),
 # both folders need to be on sys.path so those local imports resolve no
 # matter which one loads first.
-for _p in (COCKPIT_DIR, RADAR_DIR):
+for _p in (COCKPIT_DIR, COCKPIT2_DIR, RADAR_DIR):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
 parser = argparse.ArgumentParser()
-# Cockpit args -- same names/defaults as cockpit/gui/app.py's own parser.
+# Cockpit model choice. v2 = CockpitNetV2 on dataset_v2 (default); v1 = old CockpitNet.
+parser.add_argument("--cockpit_version", choices=["v1", "v2"], default="v2")
+parser.add_argument("--cockpit2_model_dir",
+                    default=os.path.join(REPO_ROOT, "cockpit2", "dataset_v2", "model_v2"),
+                    help="v2: folder containing best_model.pt")
+parser.add_argument("--cockpit2_reference",
+                    default=os.path.join(REPO_ROOT, "cockpit2", "dataset_v2", "reference_panel.png"),
+                    help="v2: reference panel image for the 'is this the training view?' check")
+parser.add_argument("--cockpit_llm_on_cpu", action="store_true",
+                    help="v2: run the Qwen intent router on CPU (use if the GPU runs out of memory)")
+parser.add_argument("--cockpit_no_llm", action="store_true",
+                    help="v2: skip the Qwen router, use the TF-IDF fallback (fast start, no download)")
+# v1 cockpit args -- same names/defaults as cockpit/gui/app.py's own parser.
 parser.add_argument("--cockpit_data_dir", default=None,
-                     help="Your local consolidated/ folder. Required to use the Cockpit card.")
+                     help="v1 only: your local consolidated/ folder.")
 parser.add_argument("--cockpit_img_width", type=int, default=224)
 parser.add_argument("--cockpit_img_height", type=int, default=224)
 parser.add_argument("--cockpit_use_letterbox", action="store_true")
@@ -87,6 +102,22 @@ _radar_system = None
 def get_cockpit_system():
     global _cockpit_system
     if _cockpit_system is not None:
+        return _cockpit_system, None
+    if args.cockpit_version == "v2":
+        ckpt = os.path.join(args.cockpit2_model_dir, "best_model.pt")
+        if not os.path.exists(ckpt):
+            return None, (f"Cockpit v2 model not found at {ckpt} -- train it (cockpit2/process/"
+                           f"train_v2.py) or pass --cockpit2_model_dir.")
+        from copilot_core_v2 import CopilotSystemV2
+        print(f"Loading Cockpit v2 from {ckpt} ...")
+        _cockpit_system = CopilotSystemV2(
+            model_dir=args.cockpit2_model_dir,
+            reference_panel=args.cockpit2_reference,
+            confidence_threshold=args.cockpit_confidence_threshold,
+            llm_on_cpu=args.cockpit_llm_on_cpu,
+            use_llm=not args.cockpit_no_llm,
+        )
+        print(f"Cockpit v2 loaded: {_cockpit_system.model_info}")
         return _cockpit_system, None
     if not args.cockpit_data_dir:
         return None, ("Cockpit isn't configured for this run -- restart with "
@@ -138,19 +169,41 @@ COCKPIT_PRESET_QUESTIONS = [
     "Are we climbing?",
     "What phase of flight are we in?",
 ]
+if args.cockpit_version == "v2":
+    COCKPIT_PRESET_QUESTIONS += ["What is the vertical speed?", "What is the engine RPM?"]
 
 
 def cockpit_run_analysis(image, question):
     system, err = get_cockpit_system()
     if err:
-        return err, "", "", 0.0
+        return err, "", "", 0.0, None
     if image is None:
-        return "Please upload a cockpit panel image first.", "", "", 0.0
+        return "Please upload a cockpit panel image first.", "", "", 0.0, None
     if not question or not question.strip():
-        return "Please enter or select a question.", "", "", 0.0
+        return "Please enter or select a question.", "", "", 0.0, None
 
     result = system.answer(image, question)
     p = result["params"]
+    if args.cockpit_version == "v2":
+        sim = result["panel_similarity"]
+        key_detections_md = (
+            f"- **Altitude:** {p['altitude']:,.0f} ft\n"
+            f"- **Airspeed:** {max(p['airspeed'], 0):.0f} kt\n"
+            f"- **Heading:** {p['heading']:03.0f}°\n"
+            f"- **Pitch:** {p['pitch']:+.1f}°  •  **Roll:** {p['roll']:+.1f}°\n"
+            f"- **Vertical speed:** {p['vs']:+.0f} ft/min  •  **Turn rate:** {p['turn']:+.2f} std-rate\n"
+            f"- **Engine:** {max(p['rpm'], 0):,.0f} RPM\n"
+            f"- **Flight phase (learned):** {result['phase']} ({result['phase_confidence'] * 100:.0f}%)\n"
+            f"- **Input:** {result['crop_mode'].replace('_', ' ')}"
+            + (f", panel match {sim:.2f}" if sim is not None else "")
+        )
+        footer_md = (
+            f"**Model:** {system.model_info}  •  "
+            f"**Latency:** {result['timings']['total_ms']:.0f}ms  •  "
+            f"**Matched intent:** {result['intent']}"
+        )
+        return (result["answer"], key_detections_md, footer_md, result["confidence"] * 100,
+                result["panel"])
     key_detections_md = (
         f"- **Altitude:** {p['altitude']:.0f} ft\n"
         f"- **Airspeed:** {p['airspeed']:.0f} kt\n"
@@ -164,7 +217,7 @@ def cockpit_run_analysis(image, question):
         f"**Latency:** {result['timings']['total_ms']:.0f}ms  •  "
         f"**Matched intent:** {result['intent']}"
     )
-    return result["answer"], key_detections_md, footer_md, result["confidence"] * 100
+    return result["answer"], key_detections_md, footer_md, result["confidence"] * 100, None
 
 
 # =========================================================================
@@ -213,7 +266,9 @@ with gr.Blocks(css=CUSTOM_CSS, theme=gr.themes.Base(primary_hue="blue")) as demo
         gr.Markdown("Choose a module to launch.")
         with gr.Row():
             with gr.Column(elem_classes="launch-card"):
-                gr.Markdown("**Cockpit**\n\nAltitude, airspeed, heading, banking, climbing, flight phase.")
+                gr.Markdown("**Cockpit**\n\nAltitude, airspeed, heading, bank, pitch, vertical speed, "
+                            "engine RPM, flight phase." if args.cockpit_version == "v2" else
+                            "**Cockpit**\n\nAltitude, airspeed, heading, banking, climbing, flight phase.")
                 cockpit_card_btn = gr.Button("Launch Cockpit", variant="primary")
             with gr.Column(elem_classes="launch-card"):
                 gr.Markdown("**Radar**\n\nAircraft count, position, altitude, callsign.")
@@ -224,7 +279,8 @@ with gr.Blocks(css=CUSTOM_CSS, theme=gr.themes.Base(primary_hue="blue")) as demo
         cockpit_back_btn = gr.Button("← Back")
         with gr.Row():
             with gr.Column(scale=1):
-                cockpit_image_input = gr.Image(type="pil", label="Upload cockpit panel image",
+                cockpit_image_input = gr.Image(type="pil", label="Upload cockpit image (full FlightGear "
+                                                "screenshot or instrument-panel crop)",
                                                 sources=["upload", "clipboard"])
                 cockpit_preset_dropdown = gr.Dropdown(
                     choices=COCKPIT_PRESET_QUESTIONS, label="Sample questions", value=None)
@@ -240,6 +296,8 @@ with gr.Blocks(css=CUSTOM_CSS, theme=gr.themes.Base(primary_hue="blue")) as demo
                 gr.Markdown("**Key Detections**")
                 cockpit_detections_output = gr.Markdown(elem_id="detections_box")
                 cockpit_footer_output = gr.Markdown(elem_id="footer_box")
+                cockpit_panel_output = gr.Image(label="What the model read (instrument panel)",
+                                                interactive=False)
 
         cockpit_preset_dropdown.change(fn=lambda q: q, inputs=cockpit_preset_dropdown,
                                         outputs=cockpit_question_box)
@@ -247,7 +305,7 @@ with gr.Blocks(css=CUSTOM_CSS, theme=gr.themes.Base(primary_hue="blue")) as demo
             fn=cockpit_run_analysis,
             inputs=[cockpit_image_input, cockpit_question_box],
             outputs=[cockpit_answer_output, cockpit_detections_output,
-                     cockpit_footer_output, cockpit_confidence_output],
+                     cockpit_footer_output, cockpit_confidence_output, cockpit_panel_output],
         )
 
     # ---------------- Radar panel ----------------

@@ -1,0 +1,6 @@
+true,engine_off,taxi,takeoff_roll,climb,level_flight
+engine_off,75,0,0,0,0
+taxi,0,75,0,0,0
+takeoff_roll,0,0,75,0,0
+climb,0,0,0,75,0
+level_flight,0,0,0,0,75
