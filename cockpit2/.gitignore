@@ -17,3 +17,13 @@ dataset_v2/model_v2/*
 !dataset_v2/model_v2/phase_confusion.csv
 !dataset_v2/model_v2/test_predictions.csv
 !dataset_v2/model_v2/split.csv
+!dataset_v2/model_v2/val_metrics.json
+!dataset_v2/model_v2/val_predictions.csv
+!dataset_v2/model_v2/val_per_phase.csv
+!dataset_v2/model_v2/test_per_phase.csv
+
+# exported copy of the test images (process/export_test_set.py) -- images stay local
+dataset_v2_test/
+
+# zip archives of the dataset / test set -- local only
+*.zip

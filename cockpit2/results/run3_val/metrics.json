@@ -1,0 +1,84 @@
+{
+  "n": 375,
+  "per_gauge": {
+    "pitch": {
+      "unit": "deg",
+      "MAE": 0.189,
+      "within_1": 100.0,
+      "baseline_MAE": 2.417,
+      "baseline_within_1": 20.3
+    },
+    "roll": {
+      "unit": "deg",
+      "MAE": 0.436,
+      "within_2": 99.7,
+      "baseline_MAE": 2.385,
+      "baseline_within_2": 76.8
+    },
+    "airspeed": {
+      "unit": "kt",
+      "MAE": 1.677,
+      "within_5": 94.4,
+      "baseline_MAE": 35.74,
+      "baseline_within_5": 6.1
+    },
+    "altitude": {
+      "unit": "ft",
+      "MAE": 2.687,
+      "within_100": 100.0,
+      "baseline_MAE": 2431.318,
+      "baseline_within_100": 0.3
+    },
+    "vs": {
+      "unit": "ft/min",
+      "MAE": 9.568,
+      "within_100": 100.0,
+      "baseline_MAE": 210.975,
+      "baseline_within_100": 6.9
+    },
+    "turn": {
+      "unit": "std-rate",
+      "MAE": 0.023,
+      "within_0.2": 100.0,
+      "baseline_MAE": 0.239,
+      "baseline_within_0.2": 63.7
+    },
+    "rpm": {
+      "unit": "rpm",
+      "MAE": 53.917,
+      "within_100": 87.7,
+      "baseline_MAE": 858.522,
+      "baseline_within_100": 0.0
+    },
+    "heading": {
+      "unit": "deg",
+      "MAE": 1.095,
+      "within_5": 100.0,
+      "baseline_MAE": 85.869,
+      "baseline_within_5": 2.4
+    },
+    "altitude_coarse": {
+      "unit": "ft",
+      "MAE": 90.344,
+      "within_100": 65.3,
+      "baseline_MAE": 2431.318,
+      "baseline_within_100": 0.3
+    },
+    "altitude_shorthand": {
+      "unit": "ft",
+      "MAE": 34.634,
+      "within_100": 91.7,
+      "baseline_MAE": 2431.318,
+      "baseline_within_100": 0.3
+    }
+  },
+  "note": "baseline = always predict the TRAIN mean (heading: train circular mean); phase baseline = always the most common train phase",
+  "phase": {
+    "accuracy": 100.0,
+    "baseline_majority_accuracy": 20.0,
+    "baseline_phase": "engine_off"
+  },
+  "ckpt": "C:\\Users\\krupa\\sem6\\capstone\\datasets\\vqa-demo\\cockpit2\\dataset_v2\\model_v2-run3 perfect whats in git\\best_model.pt",
+  "split": "val",
+  "needle_use": null
+}

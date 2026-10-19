@@ -20,17 +20,25 @@ cockpit2/
 │   └── copilot_core_v2.py        # inference + question answering (used by ../integrated.py)
 ├── process/
 │   ├── check_dataset.py          # read-only dataset check (run before training)
-│   ├── train_v2.py               # training + test-set evaluation
+│   ├── train_v2.py               # training + validation/test evaluation
+│   ├── metrics_v2.py             # shared metrics, per-phase "shortcut" check, model decision rule
+│   ├── eval_v2.py                # evaluate any checkpoint on val/test/hold-out; --compare_to applies the rule
+│   ├── export_test_set.py        # copies the 375 test images into a separate folder (for sharing)
 │   └── check_inference_v2.py     # checks the app path (auto-crop + model) against the labels
 ├── dataset_v2/                   # only small files are in git (see "What is not in git")
 │   ├── reference_panel.png       # needed at runtime: "is this the training view?" check
 │   ├── view_lock.json            # screen size + FlightGear camera view used for every capture
-│   └── model_v2/                 # results of the final run (run 3)
+│   └── model_v2/                 # results of the final run (run 6)
+│       ├── val_metrics.json      # validation metrics (the set the final model was chosen on)
+│       ├── val_predictions.csv, val_per_phase.csv
 │       ├── test_metrics.json     # per-gauge MAE, % within tolerance, baselines, phase accuracy
-│       ├── test_predictions.csv  # per-image prediction vs label (test set)
+│       ├── test_predictions.csv, test_per_phase.csv
 │       ├── phase_confusion.csv
 │       └── split.csv             # which image was train / val / test
-├── train_log.txt, train_log_run2.txt, train_log_run3.txt   # console logs of the three training runs
+├── results/
+│   ├── run3_val/                 # run 3 re-evaluated on the validation set (eval_v2.py)
+│   └── run6_val/                 # run 6 on the validation set + decision.txt (PASS)
+├── train_log*.txt                # console logs of training runs 1-6
 ├── requirements.txt
 └── README.md
 ```
@@ -63,11 +71,19 @@ python -c "import torch; print(torch.__version__, 'CUDA:', torch.cuda.is_availab
 ```
 python process/check_dataset.py --data_dir dataset_v2            # must end with "OK"
 python process/train_v2.py --data_dir dataset_v2 --smoke         # ~2 min pipeline check
-python process/train_v2.py --data_dir dataset_v2                 # full training (run 3 config is the default)
+python process/train_v2.py --data_dir dataset_v2 --needles rpm,airspeed,vs   # full training, final (run 6) config
 python process/check_inference_v2.py --data_dir dataset_v2       # app path == training path?
+python process/eval_v2.py --ckpt dataset_v2/model_v2/best_model.pt --data_dir dataset_v2 --split val --out results/my_val
 ```
+Use `python -u` when piping output to a log file (e.g. `Tee-Object` in PowerShell), otherwise
+nothing is printed until the end.
+
+Without `--needles`, `train_v2.py` trains the run 3 configuration.
+Checkpoints from every run (1-6) load with the current `gui/cockpit_model_v2.py`.
+
 Training writes to `dataset_v2/model_v2/`. The split is fixed by `--split_seed 42`, so every
-run is tested on the same 375 images. `--seed` changes only weight init and data order.
+run uses the same 1750 / 375 / 375 train / val / test images. `--seed` changes only weight
+init and data order.
 
 The app is started from the repo root with `python integrated.py`. Cockpit v2 is the default;
 see `python integrated.py --help`.
@@ -88,28 +104,47 @@ How it works:
 - Each frame is rejected if a read-back value is off or if the panel doesn't match
   `reference_panel.png`.
 
-## Results (test set, 375 frames = 75 per phase; final model = run 3)
-Source: `dataset_v2/model_v2/test_metrics.json`. The baseline is "always predict the training mean".
+## Results (final model = run 6)
+The final model was chosen on the **validation** set (375 frames) by a rule fixed before
+run 6 was trained: every gauge and phase within 1 point of run 3's "% within tolerance", and
+RPM ≥ 95%. Run 6 passed (`results/run6_val/decision.txt`).
+
+Test set (375 frames = 75 per phase). Source: `dataset_v2/model_v2/test_metrics.json`.
+The baseline is "always predict the training mean".
 
 | Gauge (tolerance) | MAE | within tolerance | baseline within |
 |---|---|---|---|
-| pitch (±1°) | 0.21° | 100% | 19.5% |
-| roll (±2°) | 0.39° | 99.7% | 74.7% |
-| airspeed (±5 kt) | 1.75 kt | 96.3% | 2.4% |
-| altitude (±100 ft) | 3.0 ft | 100% | 0% |
-| vertical speed (±100 fpm) | 9.2 fpm | 100% | 7.5% |
-| turn rate (±0.2) | 0.023 | 100% | 65.6% |
-| RPM (±100) | 57.2 | 86.7% | 0% |
-| heading (±5°) | 1.14° | 100% | 2.1% |
+| pitch (±1°) | 0.17° | 99.7% | 19.5% |
+| roll (±2°) | 0.42° | 98.9% | 74.7% |
+| airspeed (±5 kt) | 1.02 kt | 98.7% | 2.4% |
+| altitude (±100 ft) | 3.06 ft | 100% | 0% |
+| vertical speed (±100 fpm) | 9.87 fpm | 100% | 7.5% |
+| turn rate (±0.2) | 0.02 | 100% | 65.6% |
+| RPM (±100) | 12.7 | 100% | 0% |
+| heading (±5°) | 0.94° | 100% | 2.1% |
 | phase | – | 100% accuracy | 20% (majority class) |
 
-Run history:
+Validation, run 3 → run 6 (% within tolerance): RPM 87.7 → 99.7, airspeed 94.4 → 99.2,
+pitch 100 → 99.5, roll 99.7 → 98.9; altitude, vertical speed, turn, heading and phase 100 in both.
+
+The app check (`check_inference_v2.py`, 25 test crops through `copilot_core_v2`) gives
+RPM MAE 12.4 and airspeed 1.07 kt, matching training.
+
+Run history (test set, % within tolerance):
 - **Run 1** used regression only. Altitude was 42.1% within ±100 ft, because the altimeter
   hands weren't read precisely.
-- **Run 2** added a long-hand angle head.
-- **Run 3** added a short-hand angle head. Altitude reached 100% with no 1,000-ft misreads,
-  but RPM dropped from 96.3% to 86.7% within ±100. The cause is not established yet: it
-  could be loss balancing or seed-to-seed noise.
+- **Run 2** added an angle head for the altimeter's long hand (98.1%).
+- **Run 3** added an angle head for the short hand. Altitude reached 100%, but RPM dropped
+  to 86.7%.
+- **Run 4** repeated run 3 with seed 7: RPM 83.2%, so the drop is real, not seed noise.
+  Inside each phase the model output the phase's typical RPM instead of reading the needle
+  (level_flight: prediction spread 34 rpm vs true 99 rpm).
+- **Run 5** gave the tachometer its own needle-angle head: RPM 100%, but airspeed showed the
+  same shortcut and fell to 85.1%.
+- **Run 6** gave RPM, airspeed and vertical speed needle-angle heads. On validation, the
+  needle reading was kept for RPM and airspeed; for vertical speed the plain regression
+  was slightly better (9.15 vs 9.64 fpm MAE, both 100%), so the **needle heads are used
+  for RPM and airspeed**. A dedicated needle-angle output fixed the shortcut for both.
 
 ## Limitations (please read before quoting the numbers)
 - **In-distribution only.** The test images come from the same simulator, aircraft, camera
@@ -119,5 +154,11 @@ Run history:
   this shows correct gauge reading, not an understanding of real flight.
 - **Slow airspeeds are less precise.** The C172 airspeed indicator has no markings below
   about 40 kt, so readings at taxi speeds are less precise.
-- **Results come from one training seed per run.** Small differences between runs may be noise.
+- **Development test set.** Runs 3–6 were designed after looking at errors on the 375 test
+  images, so they are no longer fully unseen; the final model was chosen on validation
+  instead. A fresh hold-out set (new captures, evaluated once) will give the final figure.
+- **Results come from one training seed per run** (run 3 was also repeated with seed 7).
+  Differences of about one point between runs may be noise.
+- **Small costs of run 6:** on validation, pitch has 2 frames out of tolerance (run 3: 0) and
+  roll 4 (run 3: 1), mostly in climb and level flight.
 - **Not comparable to v1's bin accuracies.** Those were measured on labels the images didn't show.

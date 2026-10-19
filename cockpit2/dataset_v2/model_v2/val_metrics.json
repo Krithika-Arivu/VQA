@@ -1,0 +1,100 @@
+{
+  "n": 375,
+  "per_gauge": {
+    "pitch": {
+      "unit": "deg",
+      "MAE": 0.15,
+      "within_1": 99.5,
+      "baseline_MAE": 2.417,
+      "baseline_within_1": 20.3
+    },
+    "roll": {
+      "unit": "deg",
+      "MAE": 0.452,
+      "within_2": 98.9,
+      "baseline_MAE": 2.385,
+      "baseline_within_2": 76.8
+    },
+    "airspeed": {
+      "unit": "kt",
+      "MAE": 0.974,
+      "within_5": 99.2,
+      "baseline_MAE": 35.74,
+      "baseline_within_5": 6.1
+    },
+    "altitude": {
+      "unit": "ft",
+      "MAE": 3.208,
+      "within_100": 100.0,
+      "baseline_MAE": 2431.318,
+      "baseline_within_100": 0.3
+    },
+    "vs": {
+      "unit": "ft/min",
+      "MAE": 9.149,
+      "within_100": 100.0,
+      "baseline_MAE": 210.975,
+      "baseline_within_100": 6.9
+    },
+    "turn": {
+      "unit": "std-rate",
+      "MAE": 0.021,
+      "within_0.2": 100.0,
+      "baseline_MAE": 0.239,
+      "baseline_within_0.2": 63.7
+    },
+    "rpm": {
+      "unit": "rpm",
+      "MAE": 12.199,
+      "within_100": 99.7,
+      "baseline_MAE": 858.522,
+      "baseline_within_100": 0.0
+    },
+    "heading": {
+      "unit": "deg",
+      "MAE": 0.942,
+      "within_5": 100.0,
+      "baseline_MAE": 85.869,
+      "baseline_within_5": 2.4
+    },
+    "altitude_coarse": {
+      "unit": "ft",
+      "MAE": 63.418,
+      "within_100": 81.9,
+      "baseline_MAE": 2431.318,
+      "baseline_within_100": 0.3
+    },
+    "altitude_shorthand": {
+      "unit": "ft",
+      "MAE": 33.07,
+      "within_100": 90.7,
+      "baseline_MAE": 2431.318,
+      "baseline_within_100": 0.3
+    },
+    "rpm_coarse": {
+      "unit": "rpm",
+      "MAE": 27.884,
+      "within_100": 97.9,
+      "baseline_MAE": 858.522,
+      "baseline_within_100": 0.0
+    },
+    "airspeed_coarse": {
+      "unit": "kt",
+      "MAE": 1.275,
+      "within_5": 98.1,
+      "baseline_MAE": 35.74,
+      "baseline_within_5": 6.1
+    }
+  },
+  "note": "baseline = always predict the TRAIN mean (heading: train circular mean); phase baseline = always the most common train phase",
+  "phase": {
+    "accuracy": 100.0,
+    "baseline_majority_accuracy": 20.0,
+    "baseline_phase": "engine_off"
+  },
+  "needle_use": {
+    "rpm": true,
+    "airspeed": true,
+    "vs": false
+  }
+}

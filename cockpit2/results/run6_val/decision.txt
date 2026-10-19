@@ -1,0 +1,16 @@
+new: dataset_v2\model_v2\best_model.pt
+ref: C:\Users\krupa\sem6\capstone\datasets\vqa-demo\cockpit2\dataset_v2\model_v2-run3 perfect whats in git\best_model.pt
+set: val (375)
+
+pitch     new  99.5%  ref 100.0%  ok
+roll      new  98.9%  ref  99.7%  ok
+airspeed  new  99.2%  ref  94.4%  ok
+altitude  new 100.0%  ref 100.0%  ok
+vs        new 100.0%  ref 100.0%  ok
+turn      new 100.0%  ref 100.0%  ok
+rpm       new  99.7%  ref  87.7%  ok
+heading   new 100.0%  ref 100.0%  ok
+phase     new 100.0%  ref 100.0%  ok
+rpm >= 95%: ok
+
+VERDICT: PASS -> new model is the final model
