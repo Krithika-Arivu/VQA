@@ -38,7 +38,8 @@ from torch.utils.data import DataLoader, Dataset
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "gui"))
 from cockpit_model_v2 import (PHASES, SCALARS, UNITS, CockpitNetV2, decode,  # noqa: E402
                               eval_transform, train_transform, IMG_H, IMG_W, alt_fine_target,
-                              ALT_SHORT_PERIOD)
+                              ALT_SHORT_PERIOD, NEEDLE_PERIODS, set_needle_use)
+from metrics_v2 import circular_mean_deg, evaluate, per_phase, print_block, within  # noqa: E402
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--data_dir", required=True, help="dataset_v2 folder (contains labels.csv and <phase>/ folders)")
@@ -56,7 +57,14 @@ ap.add_argument("--alt_fine", type=int, default=1, choices=[0, 1],
                 help="1 = extra altimeter long-hand angle head (run 2); 0 = regression only (run 1)")
 ap.add_argument("--alt_short", type=int, default=1, choices=[0, 1],
                 help="1 = extra altimeter short-hand angle head (run 3); 0 = off (runs 1-2)")
+ap.add_argument("--needles", default="",
+                help="comma list of gauges that get a needle-angle head, e.g. rpm,airspeed,vs "
+                     "(run 6). '' = none (runs 1-4); 'rpm' = run 5's setup")
 args = ap.parse_args()
+NEEDLES = [k.strip() for k in args.needles.split(",") if k.strip()]
+bad = [k for k in NEEDLES if k not in NEEDLE_PERIODS]
+if bad:
+    raise SystemExit(f"--needles: unknown {bad}; choose from {list(NEEDLE_PERIODS)}")
 
 # ---------------------------------------------------------------- reproducibility
 random.seed(args.seed)
@@ -68,7 +76,7 @@ torch.backends.cudnn.benchmark = False
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 OUT = os.path.join(args.data_dir, "model_v2")
 os.makedirs(OUT, exist_ok=True)
-print(f"device: {DEVICE} | input {IMG_W}x{IMG_H} | seed {args.seed} | split_seed {args.split_seed} | alt_fine {args.alt_fine} | alt_short {args.alt_short}")
+print(f"device: {DEVICE} | input {IMG_W}x{IMG_H} | seed {args.seed} | split_seed {args.split_seed} | alt_fine {args.alt_fine} | alt_short {args.alt_short} | needles {NEEDLES or 'none'}")
 
 # ---------------------------------------------------------------- data + split
 df = pd.read_csv(os.path.join(args.data_dir, "labels.csv"))
@@ -118,7 +126,9 @@ class PanelDataset(Dataset):
         return x, reg, torch.tensor([math.sin(h), math.cos(h)], dtype=torch.float32), \
             torch.tensor(PHASES.index(r["phase"]), dtype=torch.long), \
             torch.tensor(alt_fine_target(r["altitude"]), dtype=torch.float32), \
-            torch.tensor(alt_fine_target(r["altitude"], ALT_SHORT_PERIOD), dtype=torch.float32)
+            torch.tensor(alt_fine_target(r["altitude"], ALT_SHORT_PERIOD), dtype=torch.float32), \
+            torch.tensor([alt_fine_target(r[k], NEEDLE_PERIODS[k]) for k in NEEDLES] or [(0.0, 0.0)],
+                         dtype=torch.float32)
 
 
 g = torch.Generator()
@@ -129,7 +139,8 @@ dl_va = DataLoader(PanelDataset(va, eval_transform()), batch_size=args.batch_siz
 dl_te = DataLoader(PanelDataset(te, eval_transform()), batch_size=args.batch_size, num_workers=args.workers)
 
 # ---------------------------------------------------------------- model
-model = CockpitNetV2(pretrained=True, alt_fine=bool(args.alt_fine), alt_short=bool(args.alt_short)).to(DEVICE)
+model = CockpitNetV2(pretrained=True, alt_fine=bool(args.alt_fine), alt_short=bool(args.alt_short),
+                     needles=NEEDLES).to(DEVICE)
 huber = nn.SmoothL1Loss()
 ce = nn.CrossEntropyLoss()
 opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -140,15 +151,17 @@ def run(loader, train):
     model.train(train)
     tot, n = 0.0, 0
     with torch.set_grad_enabled(train):
-        for x, reg, hd, ph, af, ash in loader:
+        for x, reg, hd, ph, af, ash, nd in loader:
             x, reg, hd, ph = x.to(DEVICE), reg.to(DEVICE), hd.to(DEVICE), ph.to(DEVICE)
-            af, ash = af.to(DEVICE), ash.to(DEVICE)
+            af, ash, nd = af.to(DEVICE), ash.to(DEVICE), nd.to(DEVICE)
             out = model(x)
             loss = huber(out["reg"], reg) + huber(out["heading"], hd) + args.phase_weight * ce(out["phase"], ph)
             if "alt_fine" in out:
                 loss = loss + huber(out["alt_fine"], af)
             if "alt_short" in out:
                 loss = loss + huber(out["alt_short"], ash)
+            for j, k in enumerate(NEEDLES):
+                loss = loss + huber(out["needle_" + k], nd[:, j])
             if train:
                 opt.zero_grad()
                 loss.backward()
@@ -168,7 +181,7 @@ for ep in range(1, args.epochs + 1):
         torch.save({"model_state_dict": model.state_dict(), "norm": norm, "epoch": ep, "val_loss": vl,
                     "img_size": [IMG_H, IMG_W], "phases": PHASES, "scalars": SCALARS,
                     "dataset": "v2", "seed": args.seed, "split_seed": args.split_seed, "alt_fine": bool(args.alt_fine),
-                    "alt_short": bool(args.alt_short)}, ckpt)
+                    "alt_short": bool(args.alt_short), "needles": NEEDLES}, ckpt)
     else:
         bad_epochs += 1
     print(f"epoch {ep:>2}  train {tl:.4f}  val {vl:.4f}  lr {opt.param_groups[0]['lr']:.1e}{flag}")
@@ -176,73 +189,68 @@ for ep in range(1, args.epochs + 1):
         print(f"early stopping: val loss did not improve for {args.patience} epochs")
         break
 
-# ---------------------------------------------------------------- test evaluation
-model.load_state_dict(torch.load(ckpt, map_location=DEVICE)["model_state_dict"])
+# ---------------------------------------------------------------- evaluation
+# 1) VALIDATION: per needle gauge, keep the needle-angle reading only if it is at least as
+#    good as the plain regression ON VAL (never on test). Stored in the checkpoint; the app
+#    (load_checkpoint) applies the same choice.
+# 2) VALIDATION report + per-phase shortcut check (val_metrics.json, val_predictions.csv).
+# 3) TEST report, same code (test_metrics.json, test_predictions.csv, phase_confusion.csv).
+saved = torch.load(ckpt, map_location=DEVICE)
+model.load_state_dict(saved["model_state_dict"])
 model.eval()
-preds = []
-with torch.no_grad():
-    for x, *_ in dl_te:
-        preds += decode(model(x.to(DEVICE)), norm)
-
-TOL = {"pitch": 1.0, "roll": 2.0, "airspeed": 5.0, "altitude": 100.0, "vs": 100.0,
-       "turn": 0.2, "rpm": 100.0, "heading": 5.0, "altitude_coarse": 100.0, "altitude_shorthand": 100.0}
-UNITS = dict(UNITS, altitude_coarse="ft", altitude_shorthand="ft")
-# diagnostics: altitude_coarse = plain regression (run 1's method);
-#              altitude_shorthand = coarse corrected by the short hand only (before the long hand)
-GAUGES = SCALARS + ["heading"] + (["altitude_coarse"] if (args.alt_fine or args.alt_short) else []) \
-    + (["altitude_shorthand"] if args.alt_short else [])
-TRUE_COL = {k: k for k in GAUGES}
-TRUE_COL["altitude_coarse"] = TRUE_COL["altitude_shorthand"] = "altitude"
-
-
-def err(k, p, t):
-    if k == "heading":
-        d = abs(p - t) % 360
-        return min(d, 360 - d)
-    return abs(p - t)
-
-
-rows, metrics = [], {"n_test": len(te), "per_gauge": {}, "note": "baseline = always predict the TRAIN mean "
-                     "(heading: train circular mean); phase baseline = most common train phase"}
-for k in GAUGES:
-    e = np.array([err(k, p[k], t) for p, t in zip(preds, te[TRUE_COL[k]])])
-    if k == "heading":
-        mean_h = math.degrees(math.atan2(np.sin(np.radians(tr[k])).mean(), np.cos(np.radians(tr[k])).mean())) % 360
-        base = np.array([err(k, mean_h, t) for t in te[k]])
-    else:
-        base = np.array([err(k, tr[TRUE_COL[k]].mean(), t) for t in te[TRUE_COL[k]]])
-    metrics["per_gauge"][k] = {"unit": UNITS[k], "MAE": round(float(e.mean()), 3),
-                               f"within_{TOL[k]:g}": round(float((e <= TOL[k]).mean() * 100), 1),
-                               "baseline_MAE": round(float(base.mean()), 3),
-                               f"baseline_within_{TOL[k]:g}": round(float((base <= TOL[k]).mean() * 100), 1)}
-
-true_ph, pred_ph = list(te["phase"]), [p["phase"] for p in preds]
-acc = float(np.mean([a == b for a, b in zip(true_ph, pred_ph)]))
+base_mean = {k: float(tr[k].mean()) for k in SCALARS}
+base_heading = circular_mean_deg(tr["heading"])
 maj = tr["phase"].value_counts().idxmax()
-metrics["phase"] = {"accuracy": round(acc * 100, 1),
-                    "baseline_majority_accuracy": round(float((te["phase"] == maj).mean() * 100), 1)}
+
+
+def predict(loader):
+    out = []
+    with torch.no_grad():
+        for x, *_ in loader:
+            out += decode(model(x.to(DEVICE)), norm)
+    return out
+
+
+needle_use = {}
+if NEEDLES:
+    val_all, _ = evaluate(predict(dl_va), va, base_mean, base_heading, maj)
+    print("\nneedle reading vs plain regression on VALIDATION (keep the needle only if not worse):")
+    for k in NEEDLES:
+        mn, mc = val_all["per_gauge"][k], val_all["per_gauge"][k + "_coarse"]
+        wn, wc = within(val_all, k), within(val_all, k + "_coarse")
+        needle_use[k] = (wn, -mn["MAE"]) >= (wc, -mc["MAE"])
+        print(f"  {k:<9} needle {mn['MAE']:8.2f} / {wn:5.1f}%   regression {mc['MAE']:8.2f} / {wc:5.1f}%"
+              f"   -> use {'NEEDLE' if needle_use[k] else 'REGRESSION'}")
+    set_needle_use(model, needle_use)
+    saved["needle_use"] = needle_use
+    torch.save(saved, ckpt)
+
+val_preds = predict(dl_va)
+val_metrics, val_rows = evaluate(val_preds, va, base_mean, base_heading, maj)
+val_metrics["needle_use"] = needle_use
+val_phase = per_phase(val_rows)
+pd.DataFrame(val_rows).to_csv(os.path.join(OUT, "val_predictions.csv"), index=False)
+val_phase.to_csv(os.path.join(OUT, "val_per_phase.csv"), index=False)
+with open(os.path.join(OUT, "val_metrics.json"), "w") as f:
+    json.dump(val_metrics, f, indent=2)
+
+preds = predict(dl_te)
+metrics, rows = evaluate(preds, te, base_mean, base_heading, maj)
+metrics["n_test"] = len(te)
+metrics["needle_use"] = needle_use
+test_phase = per_phase(rows)
+true_ph, pred_ph = list(te["phase"]), [p["phase"] for p in preds]
 cm = pd.crosstab(pd.Series(true_ph, name="true"), pd.Series(pred_ph, name="pred")).reindex(
     index=PHASES, columns=PHASES, fill_value=0)
 cm.to_csv(os.path.join(OUT, "phase_confusion.csv"))
-
-for p, (_, t) in zip(preds, te.iterrows()):
-    row = {"image": t["image"], "true_phase": t["phase"], "pred_phase": p["phase"],
-           "phase_confidence": round(p["phase_confidence"], 3)}
-    for k in GAUGES:
-        row[f"true_{k}"], row[f"pred_{k}"] = t[TRUE_COL[k]], round(p[k], 2)
-    rows.append(row)
 pd.DataFrame(rows).to_csv(os.path.join(OUT, "test_predictions.csv"), index=False)
+test_phase.to_csv(os.path.join(OUT, "test_per_phase.csv"), index=False)
 with open(os.path.join(OUT, "test_metrics.json"), "w") as f:
     json.dump(metrics, f, indent=2)
 
-print("\n================ TEST SET (never used for training or model selection) ================")
-print(f"{'gauge':<9} {'MAE':>9} {'within tol':>12} | {'baseline MAE':>12} {'baseline within':>16}")
-for k, m in metrics["per_gauge"].items():
-    wk = [c for c in m if c.startswith("within_")][0]
-    bk = [c for c in m if c.startswith("baseline_within_")][0]
-    print(f"{k:<9} {m['MAE']:>7.2f} {m['unit']:<6}{m[wk]:>5.1f}% (±{wk[7:]}) | "
-          f"{m['baseline_MAE']:>12.2f} {m[bk]:>15.1f}%")
-print(f"phase     accuracy {metrics['phase']['accuracy']}%  "
-      f"(baseline: always '{maj}' = {metrics['phase']['baseline_majority_accuracy']}%)")
+print_block("VALIDATION SET (decides the final model; used only for early stopping before)",
+            val_metrics, val_phase)
+print_block("TEST SET (never trained on; reported, NOT used to choose -- runs 3-6 were designed from it)",
+            metrics, test_phase)
 print(cm.to_string())
 print(f"\nsaved: {OUT}")

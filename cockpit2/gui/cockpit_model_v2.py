@@ -23,6 +23,19 @@ Changes vs CockpitNet (v1):
     off by exactly 1000 ft because the coarse regression (MAE ~137 ft) missed by
     >500 ft. Decode is now a 3-step cascade: coarse number -> short hand (thousands)
     -> long hand (hundreds), each step only needing the previous within half a turn.
+  * (runs 5-6) NEEDLE ANGLE HEADS. Runs 3-4 (two seeds): RPM ~57 MAE / 83-87% within
+    100 rpm vs ~32 / 96-98% in runs 1-2. Inside each phase the RPM prediction barely
+    moved (level_flight: prediction std 34 vs true std 99, error-vs-true correlation
+    -0.93): the model output the phase's typical RPM instead of reading the (clearly
+    visible) needle. Cause: each gauge in the shared regression is normalised by its
+    std over ALL phases, so a 100 rpm mistake costs almost nothing. Run 5 gave the
+    tachometer an angle head (sin/cos, one turn per period) -> RPM 11.5 / 100%, but
+    airspeed then showed the same shortcut (taxi: prediction std 2.1 vs true 7.2,
+    correlation -0.99; 85.1% within 5 kt vs 96.3%). Run 6 therefore gives EVERY
+    needle gauge that has a wide range an angle head: rpm, airspeed, vertical speed.
+    The periods are only encodings (> the gauge's range in the data); they don't
+    need to equal the real dial sweep. decode() combines angle + coarse number the
+    same way as for the altimeter.
 """
 
 import math
@@ -41,6 +54,10 @@ UNITS = {"pitch": "deg", "roll": "deg", "airspeed": "kt", "altitude": "ft", "vs"
 IMG_H, IMG_W = 352, 448
 ALT_PERIOD = 1000.0         # ft per revolution of the altimeter's long (hundreds) hand
 ALT_SHORT_PERIOD = 10000.0  # ft per revolution of the short (thousands) hand
+# needle-angle encodings: units per full turn. Must be > 2x the largest coarse-regression
+# error (decode picks the turn from the coarse number) and cover the gauge's range.
+NEEDLE_PERIODS = {"rpm": 4000.0, "airspeed": 250.0, "vs": 4000.0}
+NON_NEGATIVE = {"rpm", "airspeed"}
 IMAGENET_MEAN, IMAGENET_STD = [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]
 
 
@@ -65,7 +82,7 @@ def train_transform():
 
 
 class CockpitNetV2(nn.Module):
-    def __init__(self, pretrained=True, alt_fine=True, alt_short=True):
+    def __init__(self, pretrained=True, alt_fine=True, alt_short=True, needles=()):
         super().__init__()
         weights = torchvision.models.ResNet18_Weights.IMAGENET1K_V1 if pretrained else None
         backbone = torchvision.models.resnet18(weights=weights)
@@ -78,6 +95,8 @@ class CockpitNetV2(nn.Module):
         self.phase = nn.Linear(dim, len(PHASES))
         self.alt_fine = nn.Linear(dim, 2) if alt_fine else None    # sin, cos of the long hand
         self.alt_short = nn.Linear(dim, 2) if alt_short else None  # sin, cos of the short hand
+        self.needles = list(needles)                                 # e.g. ["rpm", "airspeed", "vs"]
+        self.needle = nn.ModuleDict({k: nn.Linear(dim, 2) for k in self.needles})  # sin, cos per needle
 
     def forward(self, x):
         f = self.dropout(self.backbone(x))
@@ -86,6 +105,8 @@ class CockpitNetV2(nn.Module):
             out["alt_fine"] = self.alt_fine(f)
         if self.alt_short is not None:
             out["alt_short"] = self.alt_short(f)
+        for k in self.needles:
+            out["needle_" + k] = self.needle[k](f)
         return out
 
 
@@ -104,12 +125,27 @@ def combine_altitude(coarse_ft, s, c, period=ALT_PERIOD):
 
 
 def load_checkpoint(path, device="cpu"):
-    """Rebuild the model exactly as it was trained (works for run 1 and run 2 files)."""
+    """Rebuild the model exactly as it was trained (works for run 1-6 files)."""
     ckpt = torch.load(path, map_location=device)
+    state = ckpt["model_state_dict"]
+    needles = ckpt.get("needles") or (["rpm"] if ckpt.get("rpm_fine") else [])
+    # run 5 stored its single tachometer head as "rpm_fine.*" -> rename to the run-6 layout
+    state = {("needle.rpm." + k[len("rpm_fine."):] if k.startswith("rpm_fine.") else k): v
+             for k, v in state.items()}
     model = CockpitNetV2(pretrained=False, alt_fine=ckpt.get("alt_fine", False),
-                         alt_short=ckpt.get("alt_short", False))
-    model.load_state_dict(ckpt["model_state_dict"])
+                         alt_short=ckpt.get("alt_short", False), needles=needles)
+    model.load_state_dict(state)
+    set_needle_use(model, ckpt.get("needle_use"))
     return model.to(device).eval(), ckpt
+
+
+def set_needle_use(model, needle_use):
+    """Run 6: train_v2 checks on the VALIDATION set, per gauge, whether the needle-angle
+    reading or the plain regression is better, and stores that as needle_use. A needle
+    head that lost is simply not output any more, so decode() falls back to the
+    regression for that gauge. The weights stay in the file (state dict unchanged)."""
+    use = needle_use or {}
+    model.needles = [k for k in model.needle.keys() if use.get(k, True)]
 
 
 def decode(out, norm):
@@ -130,6 +166,12 @@ def decode(out, norm):
         if af is not None:                            # long hand -> hundreds
             est = combine_altitude(est, float(af[i, 0]), float(af[i, 1]), ALT_PERIOD)
         d["altitude"] = est
+        for k in NEEDLE_PERIODS:                      # needle angle -> exact reading
+            if "needle_" + k in out:
+                s, c = (float(v) for v in out["needle_" + k][i].detach().cpu())
+                d[k + "_coarse"] = d[k]               # plain regression (runs 1-4 method)
+                v = combine_altitude(d[k], s, c, NEEDLE_PERIODS[k])
+                d[k] = max(0.0, v) if k in NON_NEGATIVE else v
         d["heading"] = math.degrees(math.atan2(float(hs[i, 0]), float(hs[i, 1]))) % 360
         p = probs[i]
         d["phase"] = PHASES[int(p.argmax())]
