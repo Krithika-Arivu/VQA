@@ -21,7 +21,7 @@ FLOW:
      stay loaded in memory once loaded (no reload switching back and forth).
 
 Setup:
-  pip install gradio torch torchvision pandas pillow sentence-transformers faster-whisper --break-system-packages
+  pip install gradio torch torchvision pandas pillow sentence-transformers --break-system-packages
   (plus radar/requirements-radar.txt's deps, e.g. YOLOv5's requirements --
    both modules' dependencies now need to coexist in ONE Python environment,
    since this is one process, not two separate subprocesses like before)
@@ -173,6 +173,16 @@ if args.cockpit_version == "v2":
     COCKPIT_PRESET_QUESTIONS += ["What is the vertical speed?", "What is the engine RPM?"]
 
 
+def cockpit_redo_voice():
+    """Clear the question box so a new question can be spoken."""
+    return ""
+
+
+COCKPIT_OUT_OF_SCOPE = (
+    "**Not in scope.** I can only answer questions about this cockpit's instruments: altitude, "
+    "airspeed, heading, bank/roll, pitch/climbing, vertical speed, engine RPM and flight phase.")
+
+
 def cockpit_run_analysis(image, question):
     system, err = get_cockpit_system()
     if err:
@@ -183,6 +193,12 @@ def cockpit_run_analysis(image, question):
         return "Please enter or select a question.", "", "", 0.0, None
 
     result = system.answer(image, question)
+    # Out-of-scope guard: the router found no cockpit intent (or too weak a match). Don't show
+    # instrument readings that nobody asked for -- say plainly that the question is out of scope.
+    if result["intent"] is None or result["confidence"] < args.cockpit_confidence_threshold:
+        footer_md = (f"**Latency:** {result['timings']['total_ms']:.0f}ms  •  "
+                     f"**Matched intent:** none (router confidence {result['confidence'] * 100:.0f}%)")
+        return COCKPIT_OUT_OF_SCOPE, "", footer_md, result["confidence"] * 100, None
     p = result["params"]
     if args.cockpit_version == "v2":
         sim = result["panel_similarity"]
@@ -287,10 +303,15 @@ with gr.Blocks(css=CUSTOM_CSS, theme=gr.themes.Base(primary_hue="blue")) as demo
                 cockpit_question_box = gr.Textbox(
                     label="Question", placeholder="Ask a question about the cockpit instruments...",
                     lines=2)
+                cockpit_speak_btn = gr.Button("🎤 Speak your question", elem_id="cockpit_speak_btn")
+                cockpit_redo_btn = gr.Button("🔄 Redo recording")
                 cockpit_run_btn = gr.Button("Run Analysis", variant="primary")
             with gr.Column(scale=1):
                 gr.Markdown("**Analysis Result**")
                 cockpit_answer_output = gr.Markdown(elem_id="answer_box")
+                with gr.Row():
+                    cockpit_tts_checkbox = gr.Checkbox(label="🔊 Read answer aloud", value=True)
+                    cockpit_stop_speech_btn = gr.Button("⏹ Stop", size="sm", scale=0)
                 cockpit_confidence_output = gr.Slider(
                     label="Routing confidence", minimum=0, maximum=100, value=0, interactive=False)
                 gr.Markdown("**Key Detections**")
@@ -306,6 +327,74 @@ with gr.Blocks(css=CUSTOM_CSS, theme=gr.themes.Base(primary_hue="blue")) as demo
             inputs=[cockpit_image_input, cockpit_question_box],
             outputs=[cockpit_answer_output, cockpit_detections_output,
                      cockpit_footer_output, cockpit_confidence_output, cockpit_panel_output],
+        )
+
+        # Voice input: the browser's built-in speech recognition (Web Speech API, Chrome/Edge)
+        # writes the spoken question into the question box; nothing is answered until the user
+        # clicks Run Analysis. Redo clears the question box so a new one can be spoken.
+        cockpit_speak_btn.click(
+            fn=None, inputs=[cockpit_question_box], outputs=[cockpit_question_box],
+            js=r"""
+            (current) => new Promise((resolve) => {
+                const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+                if (!SR) {
+                    alert('Voice input needs Chrome or Edge (speech recognition is not supported in this browser).');
+                    resolve(current); return;
+                }
+                const btn = document.querySelector('#cockpit_speak_btn');
+                const label = btn ? btn.textContent : '';
+                const done = (value) => { if (btn) { btn.textContent = label; } resolve(value); };
+                const rec = new SR();
+                rec.lang = 'en-US';
+                rec.interimResults = false;
+                rec.continuous = false;
+                rec.maxAlternatives = 1;
+                let heard = null;
+                rec.onresult = (e) => { heard = e.results[0][0].transcript.trim(); };
+                rec.onerror = (e) => {
+                    const msg = {
+                        'not-allowed': 'Microphone access was blocked. Allow the microphone for this page and try again.',
+                        'service-not-allowed': 'Microphone access was blocked. Allow the microphone for this page and try again.',
+                        'no-speech': 'I could not hear a question. Click Speak and try again.',
+                        'audio-capture': 'No microphone was found.',
+                        'network': 'Speech recognition needs an internet connection.'
+                    }[e.error] || ('Voice input error: ' + e.error);
+                    alert(msg);
+                };
+                rec.onend = () => { done(heard ? heard : current); };
+                if (btn) { btn.textContent = '🎙 Listening... speak now'; }
+                try { rec.start(); } catch (err) { alert('Voice input error: ' + err); done(current); }
+            })
+            """,
+        )
+        cockpit_redo_btn.click(fn=cockpit_redo_voice, outputs=[cockpit_question_box])
+
+        # Voice output: browser SpeechSynthesis (no cost, no extra Python dependency), fired
+        # whenever the answer text changes - typed, preset or spoken question alike.
+        cockpit_answer_output.change(
+            fn=None,
+            inputs=[cockpit_answer_output, cockpit_tts_checkbox],
+            outputs=None,
+            js=r"""
+            (text, enabled) => {
+                if (!enabled || !text || !('speechSynthesis' in window)) { return []; }
+                const spoken = text
+                    .replace(/[*_`#]/g, '')
+                    .replace(/ft\/min/g, 'feet per minute')
+                    .replace(/\bkt\b/g, 'knots')
+                    .replace(/\bft\b/g, 'feet')
+                    .replace(/°/g, ' degrees')
+                    .replace(/\+(\d)/g, 'plus $1')
+                    .replace(/(^|\s)-(\d)/g, '$1minus $2');
+                window.speechSynthesis.cancel();   // don't queue answers back-to-back
+                window.speechSynthesis.speak(new SpeechSynthesisUtterance(spoken));
+                return [];
+            }
+            """,
+        )
+        cockpit_stop_speech_btn.click(
+            fn=None, inputs=None, outputs=None,
+            js="() => { if ('speechSynthesis' in window) { window.speechSynthesis.cancel(); } return []; }",
         )
 
     # ---------------- Radar panel ----------------
